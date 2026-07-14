@@ -1,0 +1,8 @@
+# Local runtime and Python artifacts
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local data and uploaded files
+uploads/
+can_files/

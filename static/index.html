@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CAN Web App</title>
+    <link rel="stylesheet" href="/styles.css?v=20260608-local-timezone-dbc-stable" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>CAN Web App</h1>
+          <p>读取 BLF/ASC 和 DBC，绘制信号曲线，并导出所选通道 CSV。</p>
+        </div>
+        <div class="top-actions">
+          <label class="top-field">
+            <span>绘图点数</span>
+            <input id="maxPoints" type="number" min="500" step="500" value="5000" />
+          </label>
+          <div class="mode-toggle" aria-label="时间轴模式">
+            <button id="relativeTime" class="active" type="button">相对时间</button>
+            <button id="absoluteTime" type="button">绝对时间</button>
+          </div>
+          <label class="top-field timezone-field">
+            <span>绝对时区</span>
+            <select id="captureTimezone"></select>
+          </label>
+          <div class="mode-toggle label-toggle" aria-label="数据标签模式">
+            <button id="pathLabel" class="active" type="button">通道名</button>
+            <button id="commentLabel" type="button">中文注释</button>
+          </div>
+          <div class="mode-toggle plot-toggle" aria-label="图表显示模式">
+            <button id="combinedPlot" class="active" type="button">合并图表</button>
+            <button id="splitPlot" type="button">分开图表</button>
+          </div>
+          <button id="plotButton" class="primary">绘制曲线</button>
+          <button id="exportButton">导出 CSV</button>
+          <button id="refreshFiles" class="icon-button" title="刷新文件列表">↻</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="sidebar" aria-label="CAN 文件和信号控制">
+          <div class="panel file-panel">
+            <h2>文件</h2>
+            <label class="upload">
+              <input id="fileUpload" type="file" multiple accept=".blf,.asc,.dbc" />
+              <span>上传 / 拖放 BLF、ASC 或 DBC</span>
+            </label>
+            <label class="field">
+              <span>CAN 日志</span>
+              <div class="file-control">
+                <select id="blfSelect"></select>
+                <button id="removeBlf" class="remove-file" title="移除当前 CAN 日志" aria-label="移除当前 CAN 日志">×</button>
+              </div>
+            </label>
+            <label class="field">
+              <span>DBC 数据库</span>
+              <div class="file-control stacked">
+                <select id="dbcSelect" multiple size="5"></select>
+                <button id="removeDbc" class="remove-file" title="移除选中的 DBC" aria-label="移除选中的 DBC">×</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="panel signal-panel">
+            <div class="panel-heading">
+              <h2>通道</h2>
+              <span id="signalCount" class="muted">0</span>
+            </div>
+            <div class="channel-actions">
+              <button id="selectVisible" type="button">全选可见</button>
+              <button id="clearSignals" type="button">清空选择</button>
+            </div>
+            <div class="channel-presets">
+              <select id="channelPresetSelect" aria-label="已保存通道组合"></select>
+              <div class="channel-preset-actions">
+                <button id="saveChannelPreset" type="button">保存组合</button>
+                <button id="applyChannelPreset" type="button">套用组合</button>
+                <button id="deleteChannelPreset" type="button">删除组合</button>
+              </div>
+            </div>
+            <input id="searchSignals" class="search" type="search" placeholder="搜索信号、注释、报文或帧 ID" />
+            <div id="signals" class="signals"></div>
+          </div>
+
+        </aside>
+
+        <section class="viewer">
+          <div class="status-row">
+            <div id="status" class="status">请选择 CAN 日志和一个或多个 DBC 文件。</div>
+            <div id="stats" class="stats"></div>
+          </div>
+          <div class="plot-wrap">
+            <div class="plot-tools">
+              <button id="resetZoom" type="button" title="恢复缩放">恢复缩放</button>
+            </div>
+            <canvas id="plot" width="1200" height="640"></canvas>
+            <div id="crosshair" class="crosshair-card"></div>
+          </div>
+          <div id="legend" class="legend"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js?v=20260608-local-timezone-dbc-stable"></script>
+  </body>
+</html>
