@@ -35,7 +35,7 @@
             <button id="splitPlot" type="button">分开图表</button>
           </div>
           <button id="plotButton" class="primary">绘制曲线</button>
-          <button id="exportButton">导出 CSV</button>
+          <button id="exportButton">批量导出 CSV</button>
           <button id="refreshFiles" class="icon-button" title="刷新文件列表">↻</button>
         </div>
       </header>
@@ -49,10 +49,10 @@
               <span>上传 / 拖放 BLF、ASC 或 DBC</span>
             </label>
             <label class="field">
-              <span>CAN 日志</span>
+              <span>CAN 日志（可多选）</span>
               <div class="file-control">
-                <select id="blfSelect"></select>
-                <button id="removeBlf" class="remove-file" title="移除当前 CAN 日志" aria-label="移除当前 CAN 日志">×</button>
+                <select id="blfSelect" multiple size="6"></select>
+                <button id="removeBlf" class="remove-file" title="移除选中的 CAN 日志" aria-label="移除选中的 CAN 日志">×</button>
               </div>
             </label>
             <label class="field">

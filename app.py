@@ -148,6 +148,31 @@ def _resolve_log_file(file_id: str) -> Path:
     return path
 
 
+def _resolve_log_files(data: dict[str, Any]) -> list[Path]:
+    file_ids = data.get("logFiles")
+    if file_ids is None:
+        file_ids = [data.get("blfFile", "")]
+    if not isinstance(file_ids, list):
+        raise ValueError("日志文件列表无效。")
+    paths = [_resolve_log_file(file_id) for file_id in dict.fromkeys(file_ids) if file_id]
+    if not paths:
+        raise ValueError("请选择至少一个 .blf 或 .asc 日志文件。")
+    return paths
+
+
+def _unique_upload_path(folder: Path, filename: str) -> Path:
+    candidate = folder / filename
+    if not candidate.exists():
+        return candidate
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    index = 2
+    while candidate.exists():
+        candidate = folder / f"{stem} ({index}){suffix}"
+        index += 1
+    return candidate
+
+
 def _list_can_files(session_id: str) -> list[CanFile]:
     files: list[CanFile] = []
     folder = _session_dir(session_id)
@@ -564,6 +589,88 @@ def _decode_selected(
     }
 
 
+def _decode_logs_for_plot(
+    log_paths: list[Path],
+    db: cantools.database.Database,
+    selected_keys: list[str],
+    max_points: int,
+    capture_timezone: str | None = None,
+    capture_timezone_offset_minutes: int | None = None,
+) -> dict[str, Any]:
+    decoded_logs = [
+        _decode_selected(
+            log_path,
+            db,
+            selected_keys,
+            0,
+            for_csv=False,
+            capture_timezone=capture_timezone,
+            capture_timezone_offset_minutes=capture_timezone_offset_minutes,
+        )
+        for log_path in log_paths
+    ]
+    starts = [result["stats"].get("startEpoch") for result in decoded_logs]
+    valid_starts = [float(start) for start in starts if isinstance(start, (int, float)) and math.isfinite(start)]
+    global_start = min(valid_starts) if valid_starts else 0.0
+
+    merged_points: dict[str, list[tuple[float, float]]] = {key: [] for key in selected_keys}
+    series_info: dict[str, dict[str, Any]] = {}
+    latest = global_start
+    for result in decoded_logs:
+        stats = result["stats"]
+        start = stats.get("startEpoch")
+        if not isinstance(start, (int, float)) or not math.isfinite(start):
+            start = global_start
+        offset = float(start) - global_start
+        latest = max(latest, offset + global_start + float(stats.get("durationSeconds") or 0))
+        for series in result["series"]:
+            key = series["key"]
+            series_info.setdefault(key, series)
+            merged_points.setdefault(key, []).extend((offset + float(x), float(y)) for x, y in zip(series["x"], series["y"]))
+
+    merged_series = []
+    for key in selected_keys:
+        info = series_info.get(key, {"key": key, "label": key, "comment": "", "message": "", "name": key, "frameId": ""})
+        points = sorted(merged_points.get(key, []), key=lambda point: point[0])
+        plot_points = _downsample_points(points, max_points)
+        merged_series.append(
+            {
+                **{field: info.get(field, "") for field in ("key", "label", "comment", "message", "name", "frameId")},
+                "count": len(points),
+                "x": [round(point[0], 6) for point in plot_points],
+                "y": [point[1] for point in plot_points],
+            }
+        )
+
+    first_result = decoded_logs[0]["stats"] if decoded_logs else {}
+    has_asc_logs = any(path.suffix.lower() == ".asc" for path in log_paths)
+    absolute_time_available = all(
+        path.suffix.lower() != ".asc" or result["stats"].get("ascHeaderParts")
+        for path, result in zip(log_paths, decoded_logs)
+    )
+    return {
+        "series": merged_series,
+        "rows": [],
+        "stats": {
+            "messages": sum(result["stats"].get("messages", 0) for result in decoded_logs),
+            "decodedMessages": sum(result["stats"].get("decodedMessages", 0) for result in decoded_logs),
+            "decodeErrors": sum(result["stats"].get("decodeErrors", 0) for result in decoded_logs),
+            "startEpoch": global_start if valid_starts else None,
+            "startUtc": datetime.fromtimestamp(global_start, tz=timezone.utc).isoformat() if valid_starts else None,
+            "startLocal": _format_absolute_timestamp(global_start) if valid_starts else None,
+            "logKind": log_paths[0].suffix.lower().lstrip(".") if len(log_paths) == 1 else "multiple",
+            "logCount": len(log_paths),
+            "hasAscLogs": has_asc_logs,
+            "absoluteTimeAvailable": absolute_time_available,
+            "ascHeaderParts": first_result.get("ascHeaderParts") if len(log_paths) == 1 else None,
+            "firstMessageTimestamp": first_result.get("firstMessageTimestamp") if len(log_paths) == 1 else 0,
+            "captureTimezone": capture_timezone,
+            "captureTimezoneOffsetMinutes": capture_timezone_offset_minutes,
+            "durationSeconds": round(latest - global_start, 6) if valid_starts else 0,
+        },
+    }
+
+
 @app.get("/")
 def index() -> Response:
     return send_from_directory(STATIC_DIR, "index.html")
@@ -611,13 +718,7 @@ def upload() -> Response:
         ext = Path(original_name).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
             continue
-        if ext in LOG_EXTENSIONS:
-            for old_log in session_dir.iterdir():
-                if old_log.is_file() and old_log.suffix.lower() in LOG_EXTENSIONS:
-                    old_log.unlink(missing_ok=True)
-        target = session_dir / original_name
-        if ext == ".dbc" and target.exists():
-            target.unlink()
+        target = _unique_upload_path(session_dir, original_name)
         file.save(target)
         saved.append({"id": _file_id(target), "name": target.name, "kind": ext.lstrip("."), "size": target.stat().st_size})
     return jsonify({"files": saved})
@@ -657,17 +758,16 @@ def plot() -> Response:
     if not selected:
         return jsonify({"error": "Choose at least one signal."}), 400
     try:
-        log_path = _resolve_log_file(data.get("blfFile", ""))
+        log_paths = _resolve_log_files(data)
         dbc_paths = [_resolve_file(file_id, ".dbc") for file_id in dict.fromkeys(data.get("dbcFiles") or [])]
         db = _load_database(dbc_paths)
         capture_timezone = _parse_capture_timezone(data.get("captureTimezone"))
         capture_timezone_offset_minutes = _parse_capture_timezone_offset(data.get("captureTimezoneOffsetMinutes"))
-        result = _decode_selected(
-            log_path,
+        result = _decode_logs_for_plot(
+            log_paths,
             db,
             selected,
             int(data.get("maxPoints") or 5000),
-            for_csv=False,
             capture_timezone=capture_timezone,
             capture_timezone_offset_minutes=capture_timezone_offset_minutes,
         )

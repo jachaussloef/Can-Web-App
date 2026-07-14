@@ -161,7 +161,7 @@ function updateControls() {
 }
 
 function updateFileControls() {
-  els.removeBlf.disabled = !state.files.some((file) => file.kind === "blf" || file.kind === "asc");
+  els.removeBlf.disabled = !selectedLogFiles().length;
   els.removeDbc.disabled = !currentDbcFiles().length;
 }
 
@@ -325,14 +325,20 @@ function deleteSelectedChannelPreset() {
   setStatus(`已删除通道组合“${preset.name}”。`);
 }
 
+function selectedLogFiles() {
+  const selectedIds = new Set(Array.from(els.blfSelect.selectedOptions, (option) => option.value));
+  return state.files.filter((file) => selectedIds.has(file.id));
+}
+
 function selectedLogFile() {
-  return state.files.find((file) => file.id === els.blfSelect.value) || null;
+  return selectedLogFiles()[0] || null;
 }
 
 function selectedLogKind() {
-  const selected = selectedLogFile();
-  if (selected?.kind) return selected.kind;
-  const name = selected?.name || els.blfSelect.value || "";
+  const selected = selectedLogFiles();
+  if (selected.length > 1) return "multiple";
+  if (selected[0]?.kind) return selected[0].kind;
+  const name = selected[0]?.name || els.blfSelect.value || "";
   const match = /\.([^.\\/]+)$/.exec(name);
   return match ? match[1].toLowerCase() : "";
 }
@@ -528,7 +534,7 @@ function updateStatsFromFallbackStart(stats) {
 
 function ascDisplayTimeZone(stats = state.lastStats, captureTimezone = selectedCaptureTimezone()) {
   const logKind = stats?.logKind || selectedLogKind();
-  if (logKind !== "asc") return null;
+  if (logKind !== "asc" && !stats?.hasAscLogs) return null;
   return captureTimezone || null;
 }
 
@@ -608,14 +614,16 @@ async function loadFiles({ forceSignalReload = false } = {}) {
 }
 
 function renderFileOptions() {
-  const previousLog = els.blfSelect.value;
+  const previousLogs = new Set(Array.from(els.blfSelect.selectedOptions, (option) => option.value));
   const previousHighlightedDbcs = new Set(highlightedDbcFiles());
   const blfs = state.files.filter((file) => file.kind === "blf" || file.kind === "asc");
   const dbcs = currentDbcFiles();
   els.blfSelect.innerHTML = blfs.length
     ? blfs.map((file) => `<option value="${escapeHtml(file.id)}">${escapeHtml(file.name)} (${formatBytes(file.size)})</option>`).join("")
     : `<option value="">请上传 .blf 或 .asc 文件</option>`;
-  if (blfs.some((file) => file.id === previousLog)) els.blfSelect.value = previousLog;
+  for (const option of els.blfSelect.options) {
+    option.selected = previousLogs.size ? previousLogs.has(option.value) : true;
+  }
   els.dbcSelect.innerHTML = dbcs.map((file) => `<option value="${escapeHtml(file.id)}">${escapeHtml(file.name)}</option>`).join("");
   for (const option of els.dbcSelect.options) {
     option.selected = previousHighlightedDbcs.size ? previousHighlightedDbcs.has(option.value) : true;
@@ -825,11 +833,12 @@ function onSignalChange(event) {
 
 async function plotSelected() {
   const signals = Array.from(state.selectedSignals);
-  if (!els.blfSelect.value || !selectedDbcFiles().length || !signals.length) {
-    setStatus("请选择 CAN 日志、DBC，并至少选择一个通道。");
+  const logFiles = selectedLogFiles();
+  if (!logFiles.length || !selectedDbcFiles().length || !signals.length) {
+    setStatus("请选择至少一个 CAN 日志、DBC，并至少选择一个通道。");
     return;
   }
-  setStatus("正在解析 CAN 日志并绘制所选通道...", true);
+  setStatus(`正在解析 ${logFiles.length} 个 CAN 日志并按绝对时间合并绘图...`, true);
   state.lastSeries = [];
   state.lastStats = null;
   state.plotState = "loading";
@@ -846,7 +855,7 @@ async function plotSelected() {
     const response = await api("/api/plot", {
       method: "POST",
       body: JSON.stringify({
-        blfFile: els.blfSelect.value,
+        logFiles: logFiles.map((file) => file.id),
         dbcFiles: selectedDbcFiles(),
         signals,
         maxPoints: Number(els.maxPoints.value) || 5000,
@@ -870,7 +879,8 @@ async function plotSelected() {
     if (state.plotState === "empty") {
       setStatus("解析完成，但所选通道没有可绘制的数值数据。");
     } else {
-      setStatus(`已绘制 ${state.lastSeries.length} 个通道。CSV 导出会包含全部解码点。`);
+      const timeWarning = body.stats.absoluteTimeAvailable === false ? " 部分 ASC 缺少 date 头，无法保证跨文件的绝对时间顺序。" : "";
+      setStatus(`已按绝对时间合并 ${logFiles.length} 个日志并绘制 ${state.lastSeries.length} 个通道。CSV 将按日志分别导出。${timeWarning}`);
     }
   } catch (error) {
     state.plotState = "idle";
@@ -881,63 +891,68 @@ async function plotSelected() {
 
 async function exportSelected() {
   const signals = Array.from(state.selectedSignals);
-  if (!els.blfSelect.value || !selectedDbcFiles().length || !signals.length) {
-    setStatus("请选择 CAN 日志、DBC，并至少选择一个通道。");
+  const logFiles = selectedLogFiles();
+  if (!logFiles.length || !selectedDbcFiles().length || !signals.length) {
+    setStatus("请选择至少一个 CAN 日志、DBC，并至少选择一个通道。");
     return;
   }
-  let saveHandle = null;
-  const filename = defaultCsvFilename();
+  let directoryHandle = null;
   try {
-    if (window.showSaveFilePicker) {
-      saveHandle = await window.showSaveFilePicker({
-        suggestedName: filename,
-        types: [
-          {
-            description: "CSV 文件",
-            accept: { "text/csv": [".csv"] },
-          },
-        ],
-      });
-    }
+    if (window.showDirectoryPicker) directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
   } catch (error) {
-    setStatus(error.name === "AbortError" ? "已取消 CSV 保存。" : error.message);
+    setStatus(error.name === "AbortError" ? "已取消 CSV 导出。" : error.message);
     return;
   }
-  setStatus("正在解析 CAN 日志并准备 CSV...", true);
+  const filenames = uniqueCsvFilenames(logFiles);
+  setStatus(`正在分别导出 ${logFiles.length} 个日志的 CSV...`, true);
   try {
-    const response = await api("/api/export", {
-      method: "POST",
-      body: JSON.stringify({
-        blfFile: els.blfSelect.value,
-        dbcFiles: selectedDbcFiles(),
-        signals,
-        captureTimezone: selectedCaptureTimezone(),
-        captureTimezoneOffsetMinutes: selectedCaptureTimezoneOffsetMinutes(),
-      }),
-    });
-    const blob = await response.blob();
-    if (saveHandle) {
-      const writable = await saveHandle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-    } else {
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(url);
+    for (const [index, logFile] of logFiles.entries()) {
+      setStatus(`正在导出 ${index + 1}/${logFiles.length}：${logFile.name}...`, true);
+      const response = await api("/api/export", {
+        method: "POST",
+        body: JSON.stringify({
+          blfFile: logFile.id,
+          dbcFiles: selectedDbcFiles(),
+          signals,
+          captureTimezone: selectedCaptureTimezone(),
+          captureTimezoneOffsetMinutes: selectedCaptureTimezoneOffsetMinutes(),
+        }),
+      });
+      const blob = await response.blob();
+      if (directoryHandle) {
+        const fileHandle = await directoryHandle.getFileHandle(filenames[index], { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      } else {
+        downloadBlob(blob, filenames[index]);
+      }
     }
-    setStatus("CSV 导出完成，已包含所选通道的全部解码点。");
+    const target = directoryHandle ? "所选文件夹" : "浏览器默认下载目录";
+    setStatus(`${logFiles.length} 个 CSV 已分别导出到${target}，均包含所选通道的全部解码点。`);
   } catch (error) {
     setStatus(error.name === "AbortError" ? "已取消 CSV 保存。" : error.message);
   }
 }
 
-function defaultCsvFilename() {
-  const selected = selectedLogFile();
-  const baseName = (selected?.name || "can_export").replace(/\.[^.]+$/, "");
-  return `${baseName || "can_export"}.csv`;
+function uniqueCsvFilenames(logFiles) {
+  const used = new Map();
+  return logFiles.map((file) => {
+    const baseName = (file.name || "can_export").replace(/\.[^.]+$/, "") || "can_export";
+    const key = baseName.toLocaleLowerCase();
+    const count = (used.get(key) || 0) + 1;
+    used.set(key, count);
+    return `${baseName}${count > 1 ? ` (${count})` : ""}.csv`;
+  });
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function renderStats(stats) {
@@ -945,8 +960,9 @@ function renderStats(stats) {
     els.stats.textContent = "";
     return;
   }
-  const timezoneText = (stats.logKind || selectedLogKind()) === "asc" ? ` · 绝对时区 ${captureTimezoneDisplay(stats.captureTimezone)}` : "";
-  els.stats.textContent = `${stats.messages.toLocaleString()} 帧 · ${stats.decodedMessages.toLocaleString()} 已解码 · ${stats.durationSeconds}s · 开始 ${stats.startLocal || stats.startUtc || ""}${timezoneText}`;
+  const logText = stats.logCount > 1 ? `${stats.logCount} 个日志 · ` : "";
+  const timezoneText = (stats.hasAscLogs || (stats.logKind || selectedLogKind()) === "asc") ? ` · 绝对时区 ${captureTimezoneDisplay(stats.captureTimezone)}` : "";
+  els.stats.textContent = `${logText}${stats.messages.toLocaleString()} 帧 · ${stats.decodedMessages.toLocaleString()} 已解码 · ${stats.durationSeconds}s · 开始 ${stats.startLocal || stats.startUtc || ""}${timezoneText}`;
 }
 
 function captureTimezoneDisplay(value) {
@@ -1028,8 +1044,8 @@ function resetZoom() {
 function handleCaptureTimezoneChange() {
   if (!state.lastSeries.length && !state.lastStats) return;
   const logKind = state.lastStats?.logKind || selectedLogKind();
-  if (logKind !== "asc") {
-    setStatus("当前日志不是 ASC，绝对时区不会影响时间轴。");
+  if (logKind !== "asc" && !state.lastStats?.hasAscLogs) {
+    setStatus("当前日志不包含 ASC，绝对时区不会影响时间轴。");
     return;
   }
   state.lastStats = normalizeStatsForSelectedTimezone(state.lastStats);
@@ -1654,7 +1670,8 @@ els.upload.addEventListener("dragleave", (event) => {
   if (!els.upload.contains(event.relatedTarget)) els.upload.classList.remove("drag-over");
 });
 els.upload.addEventListener("drop", handleUploadDrop);
-els.removeBlf.addEventListener("click", () => removeFiles([els.blfSelect.value]));
+els.removeBlf.addEventListener("click", () => removeFiles(selectedLogFiles().map((file) => file.id)));
+els.blfSelect.addEventListener("change", updateFileControls);
 els.removeDbc.addEventListener("click", () => removeFiles(highlightedDbcFiles()));
 els.dbcSelect.addEventListener("keydown", (event) => {
   if (event.key === "Delete") removeFiles(highlightedDbcFiles());

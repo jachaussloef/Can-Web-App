@@ -28,7 +28,7 @@ python3 -m venv .venv
 ./.venv/bin/python -m waitress --listen=127.0.0.1:5050 --max-request-body-size=4294967296 app:app
 ```
 
-Upload `.blf`, `.asc`, and `.dbc` files through the UI. Chinese filenames are preserved. The `can_files` folder is only for local examples and is not auto-loaded by the app.
+Upload `.blf`, `.asc`, and `.dbc` files through the UI. Multiple BLF/ASC logs can be selected together: the chart merges their decoded points on a shared absolute-time axis, while CSV export creates one CSV per source log using its filename. ASC logs need a `date` header for reliable ordering across files. Chromium-based browsers opened over HTTPS (or `localhost`) can choose the destination folder; other browsers and plain HTTP LAN access download each CSV to the configured download folder. Chinese filenames are preserved. The `can_files` folder is only for local examples and is not auto-loaded by the app.
 
 ASC logs are plain text and can be much larger than BLF logs, so the Waitress examples above raise the upload request-body limit to 4 GB.
 
