@@ -1,4 +1,4 @@
-# CAN Log Viewer
+# Can-Web-App
 
 A small LAN-friendly web app for decoding Vector BLF or ASC logs with one or more DBC files, plotting selected numeric channels against relative time in seconds, and exporting selected channels to CSV.
 
@@ -40,47 +40,46 @@ Arguments: -m waitress --listen=0.0.0.0:5050 --max-request-body-size=4294967296 
 Startup directory: D:\Projects\Can-Web-App
 ```
 
-## Linux deployment with systemd and Nginx
+## Linux deployment with systemd
 
-The following example deploys the application to `/opt/can-log-viewer`, runs
-Waitress only on the loopback interface, and lets Nginx receive LAN requests.
-Replace the directory, service user, server name, and upload-size limit to suit
-your environment.
+The following example deploys the application to `/opt/Can-Web-App` and binds
+Waitress to the loopback interface for use behind a reverse proxy. Replace the
+directory, service user, and upload-size limit to suit your environment.
 
 On Debian or Ubuntu, install the system packages, create a dedicated service
 account, and give it ownership of the deployed application directory:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv nginx
-sudo useradd --system --home /opt/can-log-viewer --shell /usr/sbin/nologin canviewer
-sudo mkdir -p /opt/can-log-viewer
-sudo chown -R canviewer:canviewer /opt/can-log-viewer
+sudo apt install -y python3 python3-venv
+sudo useradd --system --home /opt/Can-Web-App --shell /usr/sbin/nologin canwebapp
+sudo mkdir -p /opt/Can-Web-App
+sudo chown -R canwebapp:canwebapp /opt/Can-Web-App
 ```
 
-Copy or clone this repository into `/opt/can-log-viewer`, then create the
+Copy or clone this repository into `/opt/Can-Web-App`, then create the
 environment and install the application dependencies as the service user:
 
 ```bash
-cd /opt/can-log-viewer
-sudo -u canviewer python3 -m venv .venv
-sudo -u canviewer ./.venv/bin/python -m pip install -r requirements.txt
+cd /opt/Can-Web-App
+sudo -u canwebapp python3 -m venv .venv
+sudo -u canwebapp ./.venv/bin/python -m pip install -r requirements.txt
 ```
 
-Create `/etc/systemd/system/can-log-viewer.service` with the following content:
+Create `/etc/systemd/system/can-web-app.service` with the following content:
 
 ```ini
 [Unit]
-Description=CAN Log Viewer
+Description=Can-Web-App
 After=network.target
 
 [Service]
 Type=simple
-User=canviewer
-Group=canviewer
-WorkingDirectory=/opt/can-log-viewer
+User=canwebapp
+Group=canwebapp
+WorkingDirectory=/opt/Can-Web-App
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/can-log-viewer/.venv/bin/python -m waitress --listen=127.0.0.1:5050 --max-request-body-size=4294967296 app:app
+ExecStart=/opt/Can-Web-App/.venv/bin/python -m waitress --listen=127.0.0.1:5050 --max-request-body-size=4294967296 app:app
 Restart=on-failure
 RestartSec=5
 UMask=0027
@@ -93,22 +92,40 @@ Enable the service, start it now, and inspect its state or logs when needed:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now can-log-viewer
-sudo systemctl status can-log-viewer
-sudo journalctl -u can-log-viewer -f
+sudo systemctl enable --now can-web-app
+sudo systemctl status can-web-app
+sudo journalctl -u can-web-app -f
 ```
 
 The application writes temporary session uploads below `uploads/`, so the
 service user must retain write permission to that directory.
 
-Create `/etc/nginx/sites-available/can-log-viewer` with the following reverse
-proxy configuration. `client_max_body_size` must be at least as large as the
-Waitress request-body limit; the example allows 4 GB uploads.
+### Direct LAN access without Nginx
+
+For a simple internal-only deployment, change the `ExecStart` listener in the
+service file from `127.0.0.1:5050` to `0.0.0.0:5050`, then reload and restart
+the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart can-web-app
+```
+
+Allow inbound port `5050` only from the required LAN subnets in the host
+firewall. Users can then access `http://<server-ip>:5050` directly.
+
+### Optional Nginx reverse proxy
+
+Install Nginx with `sudo apt install -y nginx`, keep the systemd `ExecStart`
+listener as `127.0.0.1:5050`, then create
+`/etc/nginx/sites-available/can-web-app` with the following reverse proxy
+configuration. `client_max_body_size` must be at least as large as the Waitress
+request-body limit; the example allows 4 GB uploads.
 
 ```nginx
 server {
     listen 80;
-    server_name can-viewer.lan;
+    server_name can-web-app.lan;
 
     client_max_body_size 4g;
     proxy_request_buffering off;
@@ -130,14 +147,15 @@ server {
 Enable the Nginx site and validate the configuration before reloading it:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/can-log-viewer /etc/nginx/sites-enabled/can-log-viewer
+sudo ln -s /etc/nginx/sites-available/can-web-app /etc/nginx/sites-enabled/can-web-app
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Open port 80 only to the required LAN subnets in the host firewall. Do not
-expose Waitress port `5050`: it is bound to `127.0.0.1` and intended for Nginx
-only. For HTTPS, add a TLS certificate and a `listen 443 ssl` server block.
+Open port 80 only to the required LAN subnets in the host firewall. When using
+Nginx, do not expose Waitress port `5050`: it is bound to `127.0.0.1` and
+intended for Nginx only. For HTTPS, add a TLS certificate and a `listen 443 ssl`
+server block.
 
 If a large ASC upload fails immediately in the browser with `Failed to fetch`, the request is usually being closed before Flask receives it. Check the NSSM Waitress arguments above, any reverse proxy upload limit, and the host firewall or security software.
 
