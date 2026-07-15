@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CAN Web App</title>
-    <link rel="stylesheet" href="/styles.css?v=20260608-local-timezone-dbc-stable" />
+    <link rel="stylesheet" href="/styles.css?v=20260715-ui-controls" />
   </head>
   <body>
     <main class="shell">
@@ -35,7 +35,7 @@
             <button id="splitPlot" type="button">分开图表</button>
           </div>
           <button id="plotButton" class="primary">绘制曲线</button>
-          <button id="exportButton">批量导出 CSV</button>
+          <button id="exportButton">导出CSV</button>
           <button id="refreshFiles" class="icon-button" title="刷新文件列表">↻</button>
         </div>
       </header>
@@ -94,7 +94,7 @@
           </div>
           <div class="plot-wrap">
             <div class="plot-tools">
-              <button id="resetZoom" type="button" title="恢复缩放">恢复缩放</button>
+              <button id="resetZoom" type="button" title="恢复缩放" hidden>恢复缩放</button>
             </div>
             <canvas id="plot" width="1200" height="640"></canvas>
             <div id="crosshair" class="crosshair-card"></div>
@@ -103,6 +103,6 @@
         </section>
       </section>
     </main>
-    <script src="/app.js?v=20260608-local-timezone-dbc-stable"></script>
+    <script src="/app.js?v=20260715-ui-controls"></script>
   </body>
 </html>

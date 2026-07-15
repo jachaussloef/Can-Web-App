@@ -161,12 +161,16 @@ function updateControls() {
 }
 
 function updateFileControls() {
-  els.removeBlf.disabled = !selectedLogFiles().length;
+  const logFileCount = selectedLogFiles().length;
+  els.removeBlf.disabled = !logFileCount;
+  els.exportButton.textContent = logFileCount > 1 ? "批量导出CSV" : "导出CSV";
   els.removeDbc.disabled = !currentDbcFiles().length;
 }
 
 function updateZoomControls() {
-  els.resetZoom.disabled = !state.zoom;
+  const hasZoom = Boolean(state.zoom);
+  els.resetZoom.hidden = !hasZoom;
+  els.resetZoom.disabled = !hasZoom;
 }
 
 function currentDbcFiles() {
@@ -1095,6 +1099,7 @@ function formatDateTime(date, includeDate, timeZone = null) {
 }
 
 function drawPlot() {
+  updateZoomControls();
   const series = state.lastSeries;
   const canvas = els.plot;
   const ratio = window.devicePixelRatio || 1;
@@ -1150,7 +1155,6 @@ function drawPlot() {
   ctx.font = "12px Inter, Segoe UI, sans-serif";
   ctx.textAlign = "center";
   ctx.fillText(state.timeMode === "absolute" ? "绝对时间" : "时间 (s)", layout.left + layout.width / 2, height - 14);
-  updateZoomControls();
 }
 
 function splitPlotHeight(seriesCount, wrapHeight) {
@@ -1647,12 +1651,14 @@ function clampZoom(next, full) {
     minY = center - minYSpan / 2;
     maxY = center + minYSpan / 2;
   }
-  return {
+  const clamped = {
     minX: Math.max(full.minX, minX),
     maxX: Math.min(full.maxX, maxX),
     minY: Math.max(full.minY, minY),
     maxY: Math.min(full.maxY, maxY),
   };
+  const isFullRange = Object.keys(clamped).every((key) => clamped[key] === full[key]);
+  return isFullRange ? null : clamped;
 }
 
 els.refreshFiles.addEventListener("click", loadFiles);
