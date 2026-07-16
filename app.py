@@ -265,14 +265,21 @@ def _signal_catalog(db: cantools.database.Database) -> list[dict[str, Any]]:
     return rows
 
 
-def _selected_by_frame(db: cantools.database.Database, selected_keys: list[str]) -> dict[int, set[str]]:
-    wanted = set(selected_keys)
-    by_frame: dict[int, set[str]] = {}
+def _selected_messages_by_frame(
+    db: cantools.database.Database,
+    selected_keys: list[str],
+) -> dict[int, list[tuple[Any, set[str]]]]:
+    unassigned = set(selected_keys)
+    by_frame: dict[int, list[tuple[Any, set[str]]]] = {}
     for message in db.messages:
         keys = {_signal_key(message, signal) for signal in message.signals}
-        selected = keys.intersection(wanted)
+        selected = keys.intersection(unassigned)
         if selected:
-            by_frame.setdefault(message.frame_id, set()).update(selected)
+            by_frame.setdefault(message.frame_id, []).append((message, selected))
+            # The signal catalog exposes the first occurrence of an identical key.
+            # Decode that same definition instead of duplicating samples when two
+            # DBC files contain an identical message/signal declaration.
+            unassigned.difference_update(selected)
     return by_frame
 
 
@@ -458,11 +465,10 @@ def _decode_selected(
     capture_timezone: str | None = None,
     capture_timezone_offset_minutes: int | None = None,
 ) -> dict[str, Any]:
-    by_frame = _selected_by_frame(db, selected_keys)
+    by_frame = _selected_messages_by_frame(db, selected_keys)
     if not by_frame:
         return {"series": [], "rows": [], "stats": {"messages": 0, "decodedMessages": 0}}
 
-    message_by_frame = {message.frame_id: message for message in db.messages}
     csv_columns = {
         _signal_key(message, signal): _csv_column_name(message, signal)
         for message in db.messages
@@ -485,25 +491,8 @@ def _decode_selected(
             if first_ts is None:
                 first_ts = message_ts
             last_ts = message_ts
-            selected_for_frame = by_frame.get(msg.arbitration_id)
-            if not selected_for_frame:
-                continue
-
-            try:
-                decoded = db.decode_message(
-                    msg.arbitration_id,
-                    msg.data,
-                    decode_choices=False,
-                    scaling=True,
-                    allow_truncated=True,
-                )
-            except Exception:
-                decode_errors += 1
-                continue
-
-            decoded_messages += 1
-            message = message_by_frame.get(msg.arbitration_id)
-            if message is None:
+            selected_messages = by_frame.get(msg.arbitration_id)
+            if not selected_messages:
                 continue
 
             rel_time = message_ts - first_ts
@@ -519,20 +508,37 @@ def _decode_selected(
                     "relative_time_s": f"{rel_time:.6f}",
                 }
 
-            for signal in message.signals:
-                key = _signal_key(message, signal)
-                if key not in selected_for_frame or signal.name not in decoded:
+            decoded_any = False
+            for message, selected_for_message in selected_messages:
+                try:
+                    decoded = message.decode(
+                        msg.data,
+                        decode_choices=False,
+                        scaling=True,
+                        allow_truncated=True,
+                    )
+                except Exception:
+                    decode_errors += 1
                     continue
-                value = decoded[signal.name]
-                if isinstance(value, bool):
-                    numeric = 1.0 if value else 0.0
-                elif isinstance(value, (int, float)) and math.isfinite(float(value)):
-                    numeric = float(value)
-                else:
-                    continue
-                values.setdefault(key, []).append((rel_time, numeric))
-                if csv_row is not None:
-                    csv_row[csv_columns.get(key, key)] = numeric
+
+                decoded_any = True
+                for signal in message.signals:
+                    key = _signal_key(message, signal)
+                    if key not in selected_for_message or signal.name not in decoded:
+                        continue
+                    value = decoded[signal.name]
+                    if isinstance(value, bool):
+                        numeric = 1.0 if value else 0.0
+                    elif isinstance(value, (int, float)) and math.isfinite(float(value)):
+                        numeric = float(value)
+                    else:
+                        continue
+                    values.setdefault(key, []).append((rel_time, numeric))
+                    if csv_row is not None:
+                        csv_row[csv_columns.get(key, key)] = numeric
+
+            if decoded_any:
+                decoded_messages += 1
 
             if csv_row is not None and any(csv_columns.get(key, key) in csv_row for key in selected_keys):
                 rows.append(csv_row)
