@@ -495,18 +495,17 @@ def _decode_selected(
     decoded_messages = 0
     decode_errors = 0
     asc_header = _asc_header_datetime(log_path)
-    asc_start_epoch = _datetime_to_epoch(asc_header, capture_timezone, capture_timezone_offset_minutes)
+    # BLF and ASC files in the field are not consistent about whether their
+    # calendar fields are UTC or local wall-clock time. Keep both on the raw
+    # UTC baseline here and let the selected timezone apply a display/export
+    # offset without decoding the CAN data again.
+    asc_start_epoch = _datetime_to_epoch(asc_header, "UTC")
     blf_header: datetime | None = None
-    timestamp_adjustment = 0.0
     first_absolute_ts: float | None = None
 
     with can.LogReader(str(log_path)) as reader:
         if log_path.suffix.lower() == ".blf":
             blf_header = _blf_header_datetime(reader)
-            blf_start_epoch = _datetime_to_epoch(blf_header, capture_timezone, capture_timezone_offset_minutes)
-            reader_start_timestamp = getattr(reader, "start_timestamp", None)
-            if blf_start_epoch is not None and isinstance(reader_start_timestamp, (int, float)):
-                timestamp_adjustment = blf_start_epoch - float(reader_start_timestamp)
 
         for msg in reader:
             total += 1
@@ -516,8 +515,6 @@ def _decode_selected(
             last_ts = message_ts
             if asc_start_epoch is not None:
                 absolute_ts = asc_start_epoch + message_ts
-            elif blf_header is not None:
-                absolute_ts = message_ts + timestamp_adjustment
             else:
                 absolute_ts = message_ts
             if first_absolute_ts is None:

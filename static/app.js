@@ -502,6 +502,18 @@ function absoluteDisplayTimeZone(captureTimezone = selectedCaptureTimezone()) {
   return captureTimezone || null;
 }
 
+function updateStatsForSelectedTimezone(stats) {
+  if (!stats || !Number.isFinite(stats.startEpoch)) return stats;
+  const captureTimezone = selectedCaptureTimezone();
+  const startDate = new Date(stats.startEpoch * 1000);
+  return {
+    ...stats,
+    startLocal: formatDateTime(startDate, true, absoluteDisplayTimeZone(captureTimezone)),
+    captureTimezone,
+    captureTimezoneOffsetMinutes: selectedCaptureTimezoneOffsetMinutes(),
+  };
+}
+
 async function api(path, options = {}) {
   const headers = options.body instanceof FormData ? {} : { "Content-Type": "application/json" };
   if (state.sessionId) headers["X-CAN-Session"] = state.sessionId;
@@ -829,7 +841,7 @@ async function plotSelected() {
     });
     const body = await response.json();
     state.lastSeries = enrichSeriesLabels(body.series);
-    state.lastStats = body.stats;
+    state.lastStats = updateStatsForSelectedTimezone(body.stats);
     state.plotState = seriesHasPoints(state.lastSeries) ? "ready" : "empty";
     state.hover = null;
     state.zoom = null;
@@ -1005,9 +1017,14 @@ function resetZoom() {
   updateZoomControls();
 }
 
-async function handleCaptureTimezoneChange() {
+function handleCaptureTimezoneChange() {
   if (!state.lastSeries.length && !state.lastStats) return;
-  await plotSelected();
+  state.lastStats = updateStatsForSelectedTimezone(state.lastStats);
+  state.hover = null;
+  hideCrosshair();
+  renderStats(state.lastStats);
+  drawPlot();
+  setStatus("采集时区已切换；绝对时间轴已直接偏移，CSV 导出也会使用当前时区。");
 }
 
 function displayXValue(relativeSeconds) {
