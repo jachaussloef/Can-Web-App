@@ -498,47 +498,7 @@ function epochFromCaptureTimezone(parts, timeZone) {
   return epochMs / 1000;
 }
 
-function updateStatsStartTime(stats, startEpoch, captureTimezone) {
-  const startDate = new Date(startEpoch * 1000);
-  const displayTimeZone = ascDisplayTimeZone(stats, captureTimezone);
-  return {
-    ...stats,
-    startEpoch,
-    startUtc: startDate.toISOString(),
-    startLocal: formatDateTime(startDate, true, displayTimeZone),
-    captureTimezone,
-    captureTimezoneOffsetMinutes: null,
-    fallbackStartEpoch: stats.fallbackStartEpoch ?? stats.startEpoch,
-  };
-}
-
-function normalizeStatsForSelectedTimezone(stats) {
-  const logKind = stats?.logKind || selectedLogKind();
-  if (logKind !== "asc") {
-    return stats;
-  }
-  if (!stats?.ascHeaderParts || !Number.isFinite(stats.firstMessageTimestamp)) {
-    return updateStatsFromFallbackStart(stats);
-  }
-  const captureTimezone = selectedCaptureTimezone();
-  const headerEpoch = epochFromCaptureTimezone(stats.ascHeaderParts, "UTC");
-  if (!Number.isFinite(headerEpoch)) return stats;
-  return updateStatsStartTime(stats, headerEpoch + stats.firstMessageTimestamp, captureTimezone);
-}
-
-function updateStatsFromFallbackStart(stats) {
-  const baseStartEpoch = stats?.fallbackStartEpoch ?? stats?.startEpoch;
-  if (!Number.isFinite(baseStartEpoch)) return stats;
-  const captureTimezone = selectedCaptureTimezone();
-  const baseDate = new Date(baseStartEpoch * 1000);
-  const captureOffset = captureTimezone ? timeZoneOffsetMinutes(captureTimezone, baseDate) : -baseDate.getTimezoneOffset();
-  const shiftedStartEpoch = captureTimezone ? baseStartEpoch + captureOffset * 60 : baseStartEpoch;
-  return updateStatsStartTime({ ...stats, fallbackStartEpoch: baseStartEpoch }, shiftedStartEpoch, captureTimezone);
-}
-
-function ascDisplayTimeZone(stats = state.lastStats, captureTimezone = selectedCaptureTimezone()) {
-  const logKind = stats?.logKind || selectedLogKind();
-  if (logKind !== "asc" && !stats?.hasAscLogs) return null;
+function absoluteDisplayTimeZone(captureTimezone = selectedCaptureTimezone()) {
   return captureTimezone || null;
 }
 
@@ -869,7 +829,7 @@ async function plotSelected() {
     });
     const body = await response.json();
     state.lastSeries = enrichSeriesLabels(body.series);
-    state.lastStats = normalizeStatsForSelectedTimezone(body.stats);
+    state.lastStats = body.stats;
     state.plotState = seriesHasPoints(state.lastSeries) ? "ready" : "empty";
     state.hover = null;
     state.zoom = null;
@@ -883,7 +843,7 @@ async function plotSelected() {
     if (state.plotState === "empty") {
       setStatus("解析完成，但所选通道没有可绘制的数值数据。");
     } else {
-      const timeWarning = body.stats.absoluteTimeAvailable === false ? " 部分 ASC 缺少 date 头，无法保证跨文件的绝对时间顺序。" : "";
+      const timeWarning = body.stats.absoluteTimeAvailable === false ? " 部分日志缺少可用的开始时间，无法保证跨文件的绝对时间顺序。" : "";
       setStatus(`已按绝对时间合并 ${logFiles.length} 个日志并绘制 ${state.lastSeries.length} 个通道。CSV 将按日志分别导出。${timeWarning}`);
     }
   } catch (error) {
@@ -965,7 +925,7 @@ function renderStats(stats) {
     return;
   }
   const logText = stats.logCount > 1 ? `${stats.logCount} 个日志 · ` : "";
-  const timezoneText = (stats.hasAscLogs || (stats.logKind || selectedLogKind()) === "asc") ? ` · 绝对时区 ${captureTimezoneDisplay(stats.captureTimezone)}` : "";
+  const timezoneText = ` · 采集时区 ${captureTimezoneDisplay(stats.captureTimezone)}`;
   els.stats.textContent = `${logText}${stats.messages.toLocaleString()} 帧 · ${stats.decodedMessages.toLocaleString()} 已解码 · ${stats.durationSeconds}s · 开始 ${stats.startLocal || stats.startUtc || ""}${timezoneText}`;
 }
 
@@ -1045,20 +1005,9 @@ function resetZoom() {
   updateZoomControls();
 }
 
-function handleCaptureTimezoneChange() {
+async function handleCaptureTimezoneChange() {
   if (!state.lastSeries.length && !state.lastStats) return;
-  const logKind = state.lastStats?.logKind || selectedLogKind();
-  if (logKind !== "asc" && !state.lastStats?.hasAscLogs) {
-    setStatus("当前日志不包含 ASC，绝对时区不会影响时间轴。");
-    return;
-  }
-  state.lastStats = normalizeStatsForSelectedTimezone(state.lastStats);
-  state.hover = null;
-  hideCrosshair();
-  renderStats(state.lastStats);
-  drawPlot();
-  const fallbackText = state.lastStats.ascHeaderParts ? "" : "（当前结果缺少 ASC header 明细，已按 UTC 基准做时区显示补偿）";
-  setStatus(`绝对时区已切换，时间轴已即时更新；CSV 导出也会使用当前时区。${fallbackText}`);
+  await plotSelected();
 }
 
 function displayXValue(relativeSeconds) {
@@ -1071,7 +1020,7 @@ function displayXValue(relativeSeconds) {
 function formatTimeValue(relativeSeconds) {
   if (state.timeMode === "absolute" && state.lastStats?.startEpoch) {
     const date = new Date((state.lastStats.startEpoch + relativeSeconds) * 1000);
-    return formatDateTime(date, true, ascDisplayTimeZone());
+    return formatDateTime(date, true, absoluteDisplayTimeZone());
   }
   return `${relativeSeconds.toFixed(3)} s`;
 }
@@ -1079,7 +1028,7 @@ function formatTimeValue(relativeSeconds) {
 function formatAxisTime(relativeSeconds) {
   if (state.timeMode === "absolute" && state.lastStats?.startEpoch) {
     const date = new Date((state.lastStats.startEpoch + relativeSeconds) * 1000);
-    return formatDateTime(date, false, ascDisplayTimeZone());
+    return formatDateTime(date, false, absoluteDisplayTimeZone());
   }
   return relativeSeconds.toFixed(1);
 }

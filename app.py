@@ -456,6 +456,19 @@ def _format_absolute_timestamp(
     return datetime.fromtimestamp(timestamp, tz=output_tz).isoformat(timespec="milliseconds")
 
 
+def _blf_header_datetime(reader: Any) -> datetime | None:
+    """Recover the timezone-free wall-clock time stored in a BLF header.
+
+    python-can exposes the BLF SYSTEMTIME fields as an epoch after assuming UTC.
+    Converting that value back through UTC recovers the original calendar fields
+    without applying the server's local timezone.
+    """
+    start_timestamp = getattr(reader, "start_timestamp", None)
+    if not isinstance(start_timestamp, (int, float)) or not math.isfinite(start_timestamp) or start_timestamp <= 0:
+        return None
+    return datetime.fromtimestamp(float(start_timestamp), tz=timezone.utc).replace(tzinfo=None)
+
+
 def _decode_selected(
     log_path: Path,
     db: cantools.database.Database,
@@ -482,28 +495,46 @@ def _decode_selected(
     decoded_messages = 0
     decode_errors = 0
     asc_header = _asc_header_datetime(log_path)
-    log_start_epoch = _datetime_to_epoch(asc_header, "UTC")
+    asc_start_epoch = _datetime_to_epoch(asc_header, capture_timezone, capture_timezone_offset_minutes)
+    blf_header: datetime | None = None
+    timestamp_adjustment = 0.0
+    first_absolute_ts: float | None = None
 
     with can.LogReader(str(log_path)) as reader:
+        if log_path.suffix.lower() == ".blf":
+            blf_header = _blf_header_datetime(reader)
+            blf_start_epoch = _datetime_to_epoch(blf_header, capture_timezone, capture_timezone_offset_minutes)
+            reader_start_timestamp = getattr(reader, "start_timestamp", None)
+            if blf_start_epoch is not None and isinstance(reader_start_timestamp, (int, float)):
+                timestamp_adjustment = blf_start_epoch - float(reader_start_timestamp)
+
         for msg in reader:
             total += 1
             message_ts = float(msg.timestamp)
             if first_ts is None:
                 first_ts = message_ts
             last_ts = message_ts
+            if asc_start_epoch is not None:
+                absolute_ts = asc_start_epoch + message_ts
+            elif blf_header is not None:
+                absolute_ts = message_ts + timestamp_adjustment
+            else:
+                absolute_ts = message_ts
+            if first_absolute_ts is None:
+                first_absolute_ts = absolute_ts
+
             selected_messages = by_frame.get(msg.arbitration_id)
             if not selected_messages:
                 continue
 
             rel_time = message_ts - first_ts
-            absolute_ts = (log_start_epoch + message_ts) if log_start_epoch is not None else message_ts
             csv_row: dict[str, Any] | None = None
             if for_csv:
                 csv_row = {
                     "absolute_time": _format_absolute_timestamp(
                         absolute_ts,
-                        capture_timezone if asc_header is not None else None,
-                        capture_timezone_offset_minutes if asc_header is not None else None,
+                        capture_timezone,
+                        capture_timezone_offset_minutes,
                     ),
                     "relative_time_s": f"{rel_time:.6f}",
                 }
@@ -570,26 +601,28 @@ def _decode_selected(
             "messages": total,
             "decodedMessages": decoded_messages,
             "decodeErrors": decode_errors,
-            "startEpoch": (log_start_epoch + first_ts) if log_start_epoch is not None and first_ts is not None else first_ts,
+            "startEpoch": first_absolute_ts,
             "startUtc": (
-                datetime.fromtimestamp(log_start_epoch + first_ts if log_start_epoch is not None else first_ts, tz=timezone.utc).isoformat()
-                if first_ts is not None
+                datetime.fromtimestamp(first_absolute_ts, tz=timezone.utc).isoformat()
+                if first_absolute_ts is not None
                 else None
             ),
             "startLocal": (
                 _format_absolute_timestamp(
-                    log_start_epoch + first_ts if log_start_epoch is not None else first_ts,
-                    capture_timezone if asc_header is not None else None,
-                    capture_timezone_offset_minutes if asc_header is not None else None,
+                    first_absolute_ts,
+                    capture_timezone,
+                    capture_timezone_offset_minutes,
                 )
-                if first_ts is not None
+                if first_absolute_ts is not None
                 else None
             ),
             "logKind": log_path.suffix.lower().lstrip("."),
             "ascHeaderParts": _datetime_parts(asc_header),
+            "blfHeaderParts": _datetime_parts(blf_header),
             "firstMessageTimestamp": first_ts,
             "captureTimezone": capture_timezone,
             "captureTimezoneOffsetMinutes": capture_timezone_offset_minutes,
+            "absoluteTimeAvailable": asc_header is not None if log_path.suffix.lower() == ".asc" else blf_header is not None,
             "durationSeconds": round((last_ts - first_ts), 6) if first_ts is not None and last_ts is not None else 0,
         },
     }
@@ -650,10 +683,7 @@ def _decode_logs_for_plot(
 
     first_result = decoded_logs[0]["stats"] if decoded_logs else {}
     has_asc_logs = any(path.suffix.lower() == ".asc" for path in log_paths)
-    absolute_time_available = all(
-        path.suffix.lower() != ".asc" or result["stats"].get("ascHeaderParts")
-        for path, result in zip(log_paths, decoded_logs)
-    )
+    absolute_time_available = all(result["stats"].get("absoluteTimeAvailable") for result in decoded_logs)
     return {
         "series": merged_series,
         "rows": [],
@@ -663,7 +693,11 @@ def _decode_logs_for_plot(
             "decodeErrors": sum(result["stats"].get("decodeErrors", 0) for result in decoded_logs),
             "startEpoch": global_start if valid_starts else None,
             "startUtc": datetime.fromtimestamp(global_start, tz=timezone.utc).isoformat() if valid_starts else None,
-            "startLocal": _format_absolute_timestamp(global_start) if valid_starts else None,
+            "startLocal": (
+                _format_absolute_timestamp(global_start, capture_timezone, capture_timezone_offset_minutes)
+                if valid_starts
+                else None
+            ),
             "logKind": log_paths[0].suffix.lower().lstrip(".") if len(log_paths) == 1 else "multiple",
             "logCount": len(log_paths),
             "hasAscLogs": has_asc_logs,

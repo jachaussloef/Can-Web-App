@@ -165,9 +165,9 @@ Uploaded files are isolated per browser session under `uploads/<session_id>`. Re
 
 The log reader returns message timestamps as seconds. The app uses the first CAN message as `t = 0` and plots all channels on an X axis of relative seconds. For ASC files, the app also reads the header `date` line when available so absolute timestamps can be reconstructed from the log start time.
 
-Vector ASC header dates do not always carry timezone information. The app treats ASC header dates as a UTC baseline, then uses the `绝对时区` selector to display and export wall-clock time in the desired timezone. The app selects the detected server/browser local timezone by default, falling back to a timezone with the same UTC offset when the operating system only exposes a platform-specific name. The selector is populated from the browser's IANA timezone database and shows timezone offsets with representative cities, for example `UTC`, `Asia/Shanghai`, `Europe/Berlin`, or `America/New_York`.
+BLF `SYSTEMTIME` headers and Vector ASC header dates do not include a reliable timezone offset. The app therefore treats their calendar fields as wall-clock time in the timezone selected by `采集时区`, then converts them to a real epoch for cross-file ordering, plotting, and CSV export. This avoids interpreting a China-local BLF header as UTC and displaying it eight hours late. The app selects the detected server/browser local timezone by default, falling back to a timezone with the same UTC offset when the operating system only exposes a platform-specific name. The selector is populated from the browser's IANA timezone database and shows timezone offsets with representative cities, for example `UTC`, `Asia/Shanghai`, `Europe/Berlin`, or `America/New_York`.
 
-After an ASC file has been parsed, changing `绝对时区` updates the absolute-time axis immediately without re-decoding the log. CSV export uses the timezone currently selected at export time. On Windows, `tzdata` is included in `requirements.txt` so Python can also resolve IANA timezone names when exporting.
+Changing `采集时区` reinterprets BLF and ASC header times and redraws the absolute-time axis. CSV export uses the timezone currently selected at export time. On Windows, `tzdata` is included in `requirements.txt` so Python can also resolve IANA timezone names when exporting.
 
 CSV exports include:
 
