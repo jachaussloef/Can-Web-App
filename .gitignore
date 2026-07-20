@@ -2,7 +2,7 @@
 .venv/
 __pycache__/
 *.py[cod]
-
+.agents
 # Local data and uploaded files
 uploads/
 can_files/
